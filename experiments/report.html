@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Track 2 technical report</title>
+<style>
+  @page { size: A4; margin: 10mm 13mm; }
+  body { font: 9.6pt/1.32 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #15171C; margin: 0; }
+  h1 { font-size: 15pt; margin: 0 0 2px; } .sub { color: #555; margin: 0 0 10px; font-size: 9.5pt; }
+  h2 { font-size: 10.2pt; margin: 7px 0 2px; border-bottom: 1px solid #ddd; padding-bottom: 2px; }
+  p, li { margin: 0 0 4px; } ul { margin: 0 0 4px 16px; padding: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 8.8pt; margin: 3px 0 4px; }
+  th, td { text-align: left; padding: 1px 5px; border-bottom: 1px solid #e5e5e5; } th { background: #f3f4f6; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+</style></head><body>
+<h1>Intelligent Financial Fraud Detection: technical report</h1>
+<p class="sub">DLW Datathon 2026, Track 2 · Team TEAM_NAME · Notebook: <code>fraud_detection_track2.ipynb</code> · Model: <code>model.pkl</code></p>
+
+<h2>1. Our understanding of the problem</h2>
+<p>20,000 labelled transactions, 353 fraudulent (1.8%); 12,000 to score. Accuracy is meaningless (98.2% by predicting "never fraud"), so the job is twofold: <b>rank</b> fraud above legitimate transactions as well as possible (PR-AUC), then <b>choose a threshold</b> that trades missed fraud against disturbed customers, which is the business question in the problem statement. Only 353 positives means every estimate is noisy and flexible models will memorise noise; the hidden test set has twice the share of missing values, so gaps must be handled, not dropped.</p>
+
+<h2>2. Data preparation and exploration</h2>
+<div class="two"><div>
+<p><b>Quality.</b> No duplicate ids, no impossible values. Eight columns have 0.5–0.7% missing in training and 2.0–2.4% in the test set. We keep every row: trees receive NaN natively, the linear model gets a median fill, and each column gets a <i>missing</i> indicator because absence is itself a weak signal (fraud rate 3.0% where <code>spend_last_24h</code> is missing).</p>
+<p><b>What separates fraud.</b> A new device (7.5% vs 1.2%); merchant category (luxury 5.3%, cash transfer 4.7%, electronics 3.9%, grocery 0.8%); any non-SG country (3–4% vs 1.3%); bank transfer and e-commerce channels; 23:00–03:00; larger amounts (median S$224 vs S$74); younger accounts (336 vs 796 days); bursts of activity in the last hour and day. Each effect is modest; none identifies fraud alone.</p>
+</div><div>
+<p><b>Features (31, all from one row).</b> Raw columns; <code>*_missing</code> flags; log amount and log account age; the payment relative to the account's recent average ticket; its share of the day's spend; the share of the day's transactions in the last hour; explicit flags for night, foreign, new account and high-risk category; and two interactions, new device × foreign and new device × high-risk category. The same function runs at training and scoring time.</p>
+<p><b>Validation.</b> Stratified 5-fold cross-validation with out-of-fold probabilities for every row. PR-AUC is the primary metric; F1 and recall are read at a threshold chosen on those out-of-fold scores, never at 0.5.</p>
+</div></div>
+
+<h2>3. Models compared (cross-validated)</h2>
+<table><tr><th>Model</th><th class="num">PR-AUC</th><th class="num">ROC-AUC</th><th class="num">Best F1</th><th>Note</th></tr>
+<tr><td>Logistic regression, raw columns (baseline)</td><td class="num">0.191</td><td class="num">0.772</td><td class="num">0.272</td><td>strong for its simplicity</td></tr>
+<tr><td>Logistic regression, engineered features, C = 0.03</td><td class="num">0.201</td><td class="num">0.781</td><td class="num">0.288</td><td>features add signal</td></tr>
+<tr><td>HistGradientBoosting (sklearn, 15 leaves)</td><td class="num">0.166</td><td class="num">0.752</td><td class="num">0.258</td><td>over-fits</td></tr>
+<tr><td>LightGBM, large (15 leaves, 600 trees)</td><td class="num">0.179</td><td class="num">0.733</td><td class="num">0.266</td><td>worse than the baseline</td></tr>
+<tr><td>LightGBM, small (3 leaves, 200 trees, strong regularisation)</td><td class="num">0.205</td><td class="num">0.785</td><td class="num">0.291</td><td>learns a few useful splits</td></tr>
+<tr><td><b>Final: soft-vote blend of the two best</b></td><td class="num"><b>0.206</b></td><td class="num"><b>0.785</b></td><td class="num"><b>0.290</b></td><td>different mistakes, so averaging helps</td></tr></table>
+<p><b>Why this model.</b> The signal is weak and the positives are few, so capacity hurts: the big boosted model lost to a linear baseline. A heavily regularised linear model and a 3-leaf LightGBM each reach the ceiling of this data by different routes; blending them is the most robust choice we found, and both halves are standard scikit-learn/LightGBM objects, so the model loads anywhere with <code>joblib</code>.</p>
+
+<h2>4. Operating point</h2>
+<p>We maximise F<sub>1.5</sub> rather than F<sub>1</sub>, weighting recall slightly above precision because a missed fraud normally costs more than a false alarm a customer can clear with one tap. At the chosen threshold (0.554, out-of-fold): <b>recall 34%, precision 20%, F1 0.25, 3.1% of transactions flagged</b>; 121 of 353 frauds caught, 494 legitimate customers asked to confirm out of 19,647 (2.5%). Maximising F<sub>1</sub> instead gives F1 0.29 with recall 25%. The threshold is baked into the saved model (<code>FixedThresholdClassifier</code>), so <code>predict()</code> applies it and <code>predict_proba()</code> gives the ranking score. On the public test set the model flags 4.4%, a little more than in training, consistent with its higher missingness.</p>
+
+<h2>5. Assumptions, limitations, next steps</h2>
+<ul>
+<li><b>Assumptions:</b> the hidden set comes from the same process; rows are independent (no customer id); the 24-hour and 1-hour behavioural counts were computed before the transaction, so they are not leakage.</li>
+<li><b>Limitations:</b> PR-AUC ≈ 0.21 means roughly one in five top-ranked flags is real; that is a property of the available columns, and every model family we tried lands in the same band. With 353 positives the threshold itself moves by a few points of recall between folds.</li>
+<li><b>Next:</b> customer or card identifiers for true behavioural baselines (where production systems get most of their lift); cost-based thresholding with real loss and friction figures; probability calibration for a tiered response (allow, confirm by SMS, block); monitoring of the missingness rate and country mix, which already differ between train and test.</li>
+</ul>
+</body></html>

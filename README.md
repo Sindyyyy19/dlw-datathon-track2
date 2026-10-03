@@ -199,6 +199,14 @@ Replace `TEAM_NAME` in the file names and in the notebook's first cell with our 
 
 ## Reproduce
 
+**One command (the full pipeline as a script):** [`pipeline.py`](pipeline.py) runs every step from the raw CSVs to
+`model.pkl` and the three prediction files: data checks, EDA summary, features, out-of-fold threshold selection, final
+fit and test scoring. It reproduces the committed `submission/` predictions exactly.
+
+    pip install -r submission/requirements.txt
+    python pipeline.py --team "TEAM_NAME" --compare      # writes to outputs/ in about 20 seconds
+    python pipeline.py --team "TEAM_NAME" --out-dir submission   # overwrite the submission files
+
 **Google Colab:** upload `submission/fraud_detection_track2.ipynb` and the two CSVs from `data/` (any folder), then
 `Runtime > Restart session and run all`. If a version error appears, run `!pip install -r requirements.txt` first.
 
